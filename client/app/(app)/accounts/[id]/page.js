@@ -22,6 +22,7 @@ export default function LedgerPage() {
   const [entry, setEntry] = useState(blankEntry);
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [editingEntry, setEditingEntry] = useState(null); // The entry row being edited
   const [details, setDetails] = useState(null);
   const [notice, setNotice] = useState('');
   const [deleting, setDeleting] = useState(false);
@@ -71,6 +72,27 @@ export default function LedgerPage() {
       });
       setEditing(false);
       setNotice('Details saved.');
+      await load();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveEntry(e) {
+    e.preventDefault();
+    setError('');
+    const date = bsToAd(editingEntry.bsDate);
+    if (!date) return setError('Enter a real Bikram Sambat date as YYYY-MM-DD, for example 2083-06-19');
+    setBusy(true);
+    try {
+      await api(`/parties/${id}/entries/${editingEntry._id}`, {
+        method: 'PUT',
+        body: { date, particulars: editingEntry.particulars, ref: editingEntry.ref, side: editingEntry.side, amount: Number(editingEntry.amount) },
+      });
+      setEditingEntry(null);
+      setNotice('Entry updated.');
       await load();
     } catch (err) {
       setError(err.message);
@@ -267,6 +289,46 @@ export default function LedgerPage() {
 
       <Alert>{error}</Alert>
 
+      {editingEntry && (
+        <form className="card no-print" onSubmit={saveEntry}>
+          <h2>Edit entry</h2>
+          <div className="entry-grid">
+            <div className="field">
+              <label htmlFor="ed-date">Date (BS)</label>
+              <input id="ed-date" required placeholder="2083-06-19" value={editingEntry.bsDate} onChange={(e) => setEditingEntry({ ...editingEntry, bsDate: e.target.value })} />
+              <div className="hint">{bsToAd(editingEntry.bsDate) ? `${longBs(editingEntry.bsDate)}` : 'YYYY-MM-DD'}</div>
+            </div>
+            <div className="field">
+              <label htmlFor="ed-part">Particulars</label>
+              <input id="ed-part" required maxLength={200} value={editingEntry.particulars} onChange={(e) => setEditingEntry({ ...editingEntry, particulars: e.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor="ed-ref">Voucher / Ref</label>
+              <input id="ed-ref" maxLength={40} value={editingEntry.ref} onChange={(e) => setEditingEntry({ ...editingEntry, ref: e.target.value })} />
+            </div>
+            <div className="field">
+              <label htmlFor="ed-side">Side</label>
+              <select id="ed-side" value={editingEntry.side} onChange={(e) => setEditingEntry({ ...editingEntry, side: e.target.value })}>
+                <option value="dr">Dr (debit)</option>
+                <option value="cr">Cr (credit)</option>
+              </select>
+            </div>
+            <div className="field">
+              <label htmlFor="ed-amt">Amount (Rs.)</label>
+              <input id="ed-amt" required type="number" min="0.01" step="0.01" value={editingEntry.amount} onChange={(e) => setEditingEntry({ ...editingEntry, amount: e.target.value })} />
+            </div>
+          </div>
+          <div className="inline-form">
+            <button className="btn" disabled={busy}>
+              {busy ? 'Saving…' : 'Save entry'}
+            </button>
+            <button type="button" className="btn btn-ghost" onClick={() => setEditingEntry(null)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
       {party.active && (
         <form className="card no-print" onSubmit={add}>
           <h2>Add entry</h2>
@@ -343,6 +405,22 @@ export default function LedgerPage() {
                     {!r.voided && (
                       <>
                         <button className="link-btn" onClick={() => voidEntry(r)}>Void</button>
+                        {' · '}
+                        <button
+                          className="link-btn"
+                          onClick={() => {
+                            setEditingEntry({
+                              _id: r._id,
+                              bsDate: adToBs(r.date),
+                              particulars: r.particulars,
+                              ref: r.ref || '',
+                              side: r.debit > 0 ? 'dr' : 'cr',
+                              amount: r.debit || r.credit,
+                            });
+                          }}
+                        >
+                          Edit
+                        </button>
                         {' · '}
                         <button className="link-btn" style={{ color: 'var(--red)' }} onClick={() => deleteEntry(r)}>Delete</button>
                       </>

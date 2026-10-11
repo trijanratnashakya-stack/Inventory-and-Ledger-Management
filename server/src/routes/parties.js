@@ -206,11 +206,49 @@ router.patch('/:id/entries/:entryId/void', async (req, res) => {
   res.json({ ok: true });
 });
 
+// PUT /api/parties/:id/entries/:entryId
+router.put('/:id/entries/:entryId', async (req, res) => {
+  if (!isId(req.params.id) || !isId(req.params.entryId)) return res.status(404).json({ error: 'Entry not found' });
+  const party = await Party.findById(req.params.id);
+  if (!party) return res.status(404).json({ error: 'Account not found' });
+  if (!party.active) return res.status(409).json({ error: 'This account is inactive. Reactivate it to edit entries.' });
+
+  const entry = await LedgerEntry.findOne({ _id: req.params.entryId, party: party._id });
+  if (!entry) return res.status(404).json({ error: 'Entry not found' });
+  if (entry.voided) return res.status(400).json({ error: 'Cannot edit a voided entry' });
+
+  const { date, particulars, ref, side } = req.body || {};
+  const amount = Number(req.body && req.body.amount);
+
+  if (date !== undefined) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return res.status(400).json({ error: 'Date must look like YYYY-MM-DD' });
+    entry.date = date;
+  }
+  if (particulars !== undefined) {
+    if (!particulars || !particulars.trim()) return res.status(400).json({ error: 'Particulars are required' });
+    entry.particulars = particulars.trim();
+  }
+  if (ref !== undefined) {
+    entry.ref = ref ? ref.trim() : undefined;
+  }
+  if (side !== undefined || !isNaN(amount)) {
+    if (!['dr', 'cr'].includes(side)) return res.status(400).json({ error: 'Choose Dr or Cr' });
+    if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Amount must be more than 0' });
+    entry.debit = side === 'dr' ? amount : 0;
+    entry.credit = side === 'cr' ? amount : 0;
+  }
+
+  await entry.save();
+  await Party.updateOne({ _id: party._id }, { $set: { updatedAt: new Date() } });
+  res.json({ ok: true, entry });
+});
+
 // DELETE /api/parties/:id/entries/:entryId
 router.delete('/:id/entries/:entryId', async (req, res) => {
   if (!isId(req.params.id) || !isId(req.params.entryId)) return res.status(404).json({ error: 'Entry not found' });
   const entry = await LedgerEntry.findOneAndDelete({ _id: req.params.entryId, party: req.params.id });
   if (!entry) return res.status(404).json({ error: 'Entry not found' });
+  await Party.updateOne({ _id: req.params.id }, { $set: { updatedAt: new Date() } });
   res.json({ ok: true });
 });
 
