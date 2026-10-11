@@ -18,10 +18,8 @@ function partyFields(body) {
   for (const key of ['name', 'phone', 'address', 'panNumber']) {
     if (body[key] !== undefined) out[key] = typeof body[key] === 'string' ? body[key].trim() : body[key];
   }
-  if (body.openingBalance !== undefined) out.openingBalance = Number(body.openingBalance) || 0;
   if (body.discountPercent !== undefined && body.discountPercent !== '') out.discountPercent = Number(body.discountPercent);
   if (body.creditDays !== undefined && body.creditDays !== '') out.creditDays = Number(body.creditDays);
-  if (body.openingSide !== undefined) out.openingSide = body.openingSide;
   if (body.active !== undefined) out.active = !!body.active;
   return out;
 }
@@ -152,7 +150,18 @@ router.post('/:id/entries', async (req, res) => {
 
   const { date, particulars, ref, side } = req.body || {};
   const amount = Number(req.body && req.body.amount);
-  if (!['dr', 'cr'].includes(side)) return res.status(400).json({ error: 'Choose Dr or Cr' });
+
+  if (!['Opening Balance', 'Goods', 'Cash'].includes(particulars)) return res.status(400).json({ error: 'Invalid particulars' });
+  if (particulars === 'Opening Balance') {
+    const existing = await LedgerEntry.findOne({ party: party._id, particulars: 'Opening Balance', voided: false });
+    if (existing) return res.status(400).json({ error: 'Opening balance already exists for this account' });
+  }
+
+  let finalSide = side;
+  if (particulars === 'Goods') finalSide = 'dr';
+  if (particulars === 'Cash') finalSide = 'cr';
+
+  if (!['dr', 'cr'].includes(finalSide)) return res.status(400).json({ error: 'Choose Dr or Cr' });
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Amount must be more than 0' });
 
   await LedgerEntry.create({
@@ -160,8 +169,8 @@ router.post('/:id/entries', async (req, res) => {
     date,
     particulars,
     ref: ref || undefined,
-    debit: side === 'dr' ? amount : 0,
-    credit: side === 'cr' ? amount : 0,
+    debit: finalSide === 'dr' ? amount : 0,
+    credit: finalSide === 'cr' ? amount : 0,
     createdBy: req.user._id,
   });
   res.status(201).json({ ok: true });

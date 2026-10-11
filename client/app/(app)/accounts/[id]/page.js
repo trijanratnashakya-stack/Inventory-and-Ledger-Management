@@ -47,14 +47,13 @@ export default function LedgerPage() {
 
   const { party, statement, due } = data;
   const isCustomer = party.type === 'customer';
+  const hasOpeningBalance = statement.rows.some(r => r.particulars === 'Opening Balance' && !r.voided);
 
   function startEdit() {
     setDetails({
       phone: party.phone,
       address: party.address,
       panNumber: party.panNumber,
-      openingBalance: party.openingBalance,
-      openingSide: party.openingSide,
       discountPercent: party.discountPercent,
       creditDays: party.creditDays,
     });
@@ -68,7 +67,7 @@ export default function LedgerPage() {
     try {
       await api(`/parties/${id}`, {
         method: 'PUT',
-        body: { ...details, openingBalance: Number(details.openingBalance) || 0, openingSide: details.openingSide, discountPercent: isCustomer ? Number(details.discountPercent) || 0 : 0, creditDays: Number(details.creditDays) },
+        body: { ...details, discountPercent: isCustomer ? Number(details.discountPercent) || 0 : 0, creditDays: Number(details.creditDays) },
       });
       setEditing(false);
       setNotice('Details saved.');
@@ -253,17 +252,6 @@ export default function LedgerPage() {
               <label htmlFor="d-pan">PAN number</label>
               <input id="d-pan" maxLength={20} value={details.panNumber} onChange={(e) => setDetails({ ...details, panNumber: e.target.value })} />
             </div>
-            <div className="field">
-              <label htmlFor="d-bal">Opening balance</label>
-              <input id="d-bal" type="number" min="0" step="0.01" value={details.openingBalance} onChange={(e) => setDetails({ ...details, openingBalance: e.target.value })} />
-            </div>
-            <div className="field">
-              <label htmlFor="d-side">Side</label>
-              <select id="d-side" value={details.openingSide} onChange={(e) => setDetails({ ...details, openingSide: e.target.value })}>
-                <option value="dr">Dr (debit)</option>
-                <option value="cr">Cr (credit)</option>
-              </select>
-            </div>
             {isCustomer && (
               <div className="field">
                 <label htmlFor="d-disc">Discount %</label>
@@ -300,19 +288,25 @@ export default function LedgerPage() {
             </div>
             <div className="field">
               <label htmlFor="ed-part">Particulars</label>
-              <input id="ed-part" required maxLength={200} value={editingEntry.particulars} onChange={(e) => setEditingEntry({ ...editingEntry, particulars: e.target.value })} />
+              <select id="ed-part" required value={editingEntry.particulars} onChange={(e) => setEditingEntry({ ...editingEntry, particulars: e.target.value })}>
+                <option value="Opening Balance">Opening Balance</option>
+                <option value="Goods">Goods</option>
+                <option value="Cash">Cash</option>
+              </select>
             </div>
             <div className="field">
               <label htmlFor="ed-ref">Voucher / Ref</label>
               <input id="ed-ref" maxLength={40} value={editingEntry.ref} onChange={(e) => setEditingEntry({ ...editingEntry, ref: e.target.value })} />
             </div>
-            <div className="field">
-              <label htmlFor="ed-side">Side</label>
-              <select id="ed-side" value={editingEntry.side} onChange={(e) => setEditingEntry({ ...editingEntry, side: e.target.value })}>
-                <option value="dr">Dr (debit)</option>
-                <option value="cr">Cr (credit)</option>
-              </select>
-            </div>
+            {editingEntry.particulars === 'Opening Balance' && (
+              <div className="field">
+                <label htmlFor="ed-side">Side</label>
+                <select id="ed-side" value={editingEntry.side} onChange={(e) => setEditingEntry({ ...editingEntry, side: e.target.value })}>
+                  <option value="dr">Dr (debit)</option>
+                  <option value="cr">Cr (credit)</option>
+                </select>
+              </div>
+            )}
             <div className="field">
               <label htmlFor="ed-amt">Amount (Rs.)</label>
               <input id="ed-amt" required type="number" min="0.01" step="0.01" value={editingEntry.amount} onChange={(e) => setEditingEntry({ ...editingEntry, amount: e.target.value })} />
@@ -340,19 +334,26 @@ export default function LedgerPage() {
             </div>
             <div className="field">
               <label htmlFor="e-part">Particulars</label>
-              <input id="e-part" required maxLength={200} value={entry.particulars} onChange={(e) => setEntry({ ...entry, particulars: e.target.value })} />
+              <select id="e-part" required value={entry.particulars} onChange={(e) => setEntry({ ...entry, particulars: e.target.value })}>
+                <option value="">Select particulars</option>
+                <option value="Opening Balance" disabled={hasOpeningBalance}>Opening Balance</option>
+                <option value="Goods">Goods</option>
+                <option value="Cash">Cash</option>
+              </select>
             </div>
             <div className="field">
               <label htmlFor="e-ref">Voucher / Ref</label>
               <input id="e-ref" maxLength={40} value={entry.ref} onChange={(e) => setEntry({ ...entry, ref: e.target.value })} />
             </div>
-            <div className="field">
-              <label htmlFor="e-side">Side</label>
-              <select id="e-side" value={entry.side} onChange={(e) => setEntry({ ...entry, side: e.target.value })}>
-                <option value="dr">Dr (debit)</option>
-                <option value="cr">Cr (credit)</option>
-              </select>
-            </div>
+            {entry.particulars === 'Opening Balance' && (
+              <div className="field">
+                <label htmlFor="e-side">Side</label>
+                <select id="e-side" value={entry.side} onChange={(e) => setEntry({ ...entry, side: e.target.value })}>
+                  <option value="dr">Dr (debit)</option>
+                  <option value="cr">Cr (credit)</option>
+                </select>
+              </div>
+            )}
             <div className="field">
               <label htmlFor="e-amt">Amount (Rs.)</label>
               <input id="e-amt" required type="number" min="0.01" step="0.01" value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })} />

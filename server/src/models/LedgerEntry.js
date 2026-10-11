@@ -9,7 +9,13 @@ const ledgerEntrySchema = new mongoose.Schema(
     party: { type: mongoose.Schema.Types.ObjectId, ref: 'Party', required: true, index: true },
     // Gregorian date as YYYY-MM-DD. The UI shows and accepts Bikram Sambat.
     date: { type: String, required: true, match: [/^\d{4}-\d{2}-\d{2}$/, 'Date must look like YYYY-MM-DD'] },
-    particulars: { type: String, required: [true, 'Particulars are required'], trim: true, maxlength: 200 },
+    particulars: {
+      type: String,
+      required: [true, 'Particulars are required'],
+      enum: ['Opening Balance', 'Goods', 'Cash'],
+      trim: true,
+      maxlength: 200,
+    },
     ref: { type: String, trim: true, maxlength: 40 },
     debit: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },
     credit: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },

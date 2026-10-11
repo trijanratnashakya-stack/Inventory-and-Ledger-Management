@@ -17,19 +17,31 @@ function describeBalance(signed) {
 
 // Entries must already be sorted by date, then creation time.
 function buildStatement(party, entries) {
-  let running = signedOpening(party);
+  const openingEntry = entries.find((e) => e.particulars === 'Opening Balance' && !e.voided);
+  let running;
+  if (openingEntry) {
+    running = (openingEntry.debit || 0) - (openingEntry.credit || 0);
+  } else {
+    running = signedOpening(party);
+  }
+
   let totalDebit = 0;
   let totalCredit = 0;
   const rows = entries.map((e) => {
     if (!e.voided) {
-      running = round2(running + (e.debit || 0) - (e.credit || 0));
-      totalDebit += e.debit || 0;
-      totalCredit += e.credit || 0;
+      // If it's the opening balance entry, it already set the initial 'running' balance.
+      // We should not add it again.
+      if (e !== openingEntry) {
+        running = round2(running + (e.debit || 0) - (e.credit || 0));
+        totalDebit += e.debit || 0;
+        totalCredit += e.credit || 0;
+      }
     }
     return { ...e, balance: e.voided ? null : describeBalance(running) };
   });
+
   return {
-    opening: describeBalance(signedOpening(party)),
+    opening: describeBalance(openingEntry ? (openingEntry.debit || 0) - (openingEntry.credit || 0) : signedOpening(party)),
     rows,
     totalDebit: round2(totalDebit),
     totalCredit: round2(totalCredit),
@@ -57,18 +69,22 @@ function dueInfo(party, entries, today = nepalToday(), createdDate) {
 
   const items = [];
   let payments = 0;
-  const opening = party.openingBalance || 0;
-  if (opening > 0) {
-    const onOwedSide = vendor ? party.openingSide === 'cr' : party.openingSide !== 'cr';
+  const openingEntry = live.find((e) => e.particulars === 'Opening Balance');
+  const opening = openingEntry ? (openingEntry.debit || 0) - (openingEntry.credit || 0) : (party.openingBalance || 0);
+
+  if (opening !== 0) {
+    const onOwedSide = vendor ? (openingEntry ? openingEntry.credit > 0 : party.openingSide === 'cr') : (openingEntry ? openingEntry.debit > 0 : party.openingSide !== 'cr');
+    const amount = Math.abs(opening);
     if (onOwedSide) {
       let date = createdDate || today;
       if (live.length && live[0].date < date) date = live[0].date;
-      items.push({ date, amount: opening });
+      items.push({ date, amount: amount });
     } else {
-      payments += opening;
+      payments += amount;
     }
   }
   for (const e of live) {
+    if (e === openingEntry) continue;
     if (e[owed] > 0) items.push({ date: e.date, amount: e[owed] });
     if (e[paid] > 0) payments += e[paid];
   }
