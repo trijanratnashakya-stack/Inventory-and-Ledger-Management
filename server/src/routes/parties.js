@@ -124,6 +124,7 @@ router.get('/:id', async (req, res) => {
       ref: e.ref || '',
       debit: e.debit,
       credit: e.credit,
+      openingBalanceAmount: e.openingBalanceAmount,
       voided: e.voided,
       createdBy: e.createdBy ? e.createdBy.username : null,
     }))
@@ -148,22 +149,20 @@ router.post('/:id/entries', async (req, res) => {
   if (!party) return res.status(404).json({ error: 'Account not found' });
   if (!party.active) return res.status(409).json({ error: 'This account is inactive. Reactivate it to add entries.' });
 
-  const { date, particulars, ref, side } = req.body || {};
+  const { date, particulars, ref } = req.body || {};
   const amount = Number(req.body && req.body.amount);
 
   if (!['Opening Balance', 'Goods', 'Cash'].includes(particulars)) return res.status(400).json({ error: 'Invalid particulars' });
-  if (particulars === 'Opening Balance') {
-    const existing = await LedgerEntry.findOne({ party: party._id, particulars: 'Opening Balance', voided: false });
-    if (existing) return res.status(400).json({ error: 'Opening balance already exists for this account' });
-  }
 
-  let finalSide = side;
+  // Automate side assignment
+  const isCustomer = party.type === 'customer';
+  let finalSide = 'dr'; // Default
   if (particulars === 'Opening Balance') {
     finalSide = 'dr';
   } else if (particulars === 'Goods') {
-    finalSide = 'dr';
+    finalSide = isCustomer ? 'dr' : 'cr';
   } else if (particulars === 'Cash') {
-    finalSide = 'cr';
+    finalSide = isCustomer ? 'cr' : 'dr';
   }
 
   let finalRef = ref;
@@ -171,7 +170,6 @@ router.post('/:id/entries', async (req, res) => {
     finalRef = undefined;
   }
 
-  if (!['dr', 'cr'].includes(finalSide)) return res.status(400).json({ error: 'Choose Dr or Cr' });
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Amount must be more than 0' });
 
   await LedgerEntry.create({
@@ -237,7 +235,7 @@ router.put('/:id/entries/:entryId', async (req, res) => {
   if (!entry) return res.status(404).json({ error: 'Entry not found' });
   if (entry.voided) return res.status(400).json({ error: 'Cannot edit a voided entry' });
 
-  const { date, particulars, ref, side } = req.body || {};
+  const { date, particulars, ref } = req.body || {};
   const amount = Number(req.body && req.body.amount);
 
   if (date !== undefined) {
@@ -248,14 +246,26 @@ router.put('/:id/entries/:entryId', async (req, res) => {
     if (!particulars || !particulars.trim()) return res.status(400).json({ error: 'Particulars are required' });
     entry.particulars = particulars.trim();
   }
-  if (ref !== undefined) {
-    entry.ref = ref ? ref.trim() : undefined;
+
+  // Automate side assignment
+  const isCustomer = party.type === 'customer';
+  let finalSide = 'dr'; // Default
+  if (entry.particulars === 'Opening Balance') {
+    finalSide = 'dr';
+  } else if (entry.particulars === 'Goods') {
+    finalSide = isCustomer ? 'dr' : 'cr';
+  } else if (entry.particulars === 'Cash') {
+    finalSide = isCustomer ? 'cr' : 'dr';
   }
-  if (side !== undefined || !isNaN(amount)) {
-    if (!['dr', 'cr'].includes(side)) return res.status(400).json({ error: 'Choose Dr or Cr' });
+
+  if (ref !== undefined) {
+    entry.ref = entry.particulars === 'Opening Balance' ? undefined : (ref ? ref.trim() : undefined);
+  }
+  if (!isNaN(amount)) {
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Amount must be more than 0' });
-    entry.debit = side === 'dr' ? amount : 0;
-    entry.credit = side === 'cr' ? amount : 0;
+    entry.openingBalanceAmount = entry.particulars === 'Opening Balance' ? amount : 0;
+    entry.debit = entry.particulars !== 'Opening Balance' && finalSide === 'dr' ? amount : 0;
+    entry.credit = entry.particulars !== 'Opening Balance' && finalSide === 'cr' ? amount : 0;
   }
 
   await entry.save();

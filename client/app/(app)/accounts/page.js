@@ -249,7 +249,7 @@ export default function AccountsPage() {
                     <td className="muted">{p.phone || '-'}</td>
                     <td className="muted">{p.address || '-'}</td>
                     <td className="num">
-                      <Balance value={p.balance} />
+                      <Balance value={p.balance} partyType={p.type} />
                     </td>
                     <td>
                       <DuePill due={p.due} type={p.type} />

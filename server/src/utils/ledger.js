@@ -20,7 +20,12 @@ function buildStatement(party, entries) {
   const openingEntry = entries.find((e) => e.particulars === 'Opening Balance' && !e.voided);
   let running;
   if (openingEntry) {
-    running = (openingEntry.debit || 0) - (openingEntry.credit || 0);
+    // Treat opening balance amount as positive for both dr/cr to simplify calculation,
+    // party type determines sign in buildStatement's return.
+    running = openingEntry.openingBalanceAmount || 0;
+    // For customers, Opening Balance side is Dr, so opening is positive (Dr).
+    // For vendors, Opening Balance side is Cr, so opening is negative (Cr).
+    if (party.type === 'vendor') running = -running;
   } else {
     running = signedOpening(party);
   }
@@ -28,25 +33,28 @@ function buildStatement(party, entries) {
   let totalDebit = 0;
   let totalCredit = 0;
   const rows = entries.map((e) => {
+    let rowDebit = e.debit || 0;
+    let rowCredit = e.credit || 0;
+
     if (!e.voided) {
-      // If it's the opening balance entry, it already set the initial 'running' balance.
-      // We should not add it again.
       if (e !== openingEntry) {
-        running = round2(running + (e.debit || 0) - (e.credit || 0));
-        totalDebit += e.debit || 0;
-        totalCredit += e.credit || 0;
+        running = round2(running + rowDebit - rowCredit);
+        totalDebit += rowDebit;
+        totalCredit += rowCredit;
       }
     }
+
     return {
       ...e,
       balance: e.voided ? null : describeBalance(running),
-      debit: e.particulars === 'Opening Balance' ? 0 : e.debit,
-      credit: e.particulars === 'Opening Balance' ? 0 : e.credit
+      // Keep original debit/credit for display or calculation, but treat Opening Balance entry specially in totals
+      debit: rowDebit,
+      credit: rowCredit
     };
   });
 
   return {
-    opening: describeBalance(openingEntry ? (openingEntry.debit || 0) - (openingEntry.credit || 0) : signedOpening(party)),
+    opening: describeBalance(openingEntry ? (openingEntry.openingBalanceAmount || 0) * (party.type === 'vendor' ? -1 : 1) : signedOpening(party)),
     rows,
     totalDebit: round2(totalDebit),
     totalCredit: round2(totalCredit),

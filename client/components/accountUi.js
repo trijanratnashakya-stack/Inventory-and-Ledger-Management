@@ -2,11 +2,32 @@ import { money } from '@/lib/format';
 import { adToBs, longBs } from '@/lib/bs';
 
 // A balance is { amount, side: 'Dr' | 'Cr' | '' }.
-export function Balance({ value }) {
-  if (!value || !value.side) return <span className="muted">Nil</span>;
+export function Balance({ value, partyType }) {
+  if (!value || value.amount === 0) return <span className="muted">Nil</span>;
+
+  // Custom logic: Customer positive = Dr, Vendor positive = Cr
+  // Or handle based on side if available.
+  // The requirement says:
+  // Customer: positive balance = Customer owes us (Dr)
+  // Vendor: positive balance = We owe vendor (Cr)
+
+  let colorClass = 'bal-dr'; // Default green
+  let isNegative = false;
+  if (partyType === 'customer') {
+    if (value.side === 'Cr') {
+      colorClass = 'bal-cr';
+      isNegative = true;
+    }
+  } else if (partyType === 'vendor') {
+    if (value.side === 'Dr') {
+      colorClass = 'bal-cr';
+      isNegative = true;
+    }
+  }
+
   return (
-    <span className={value.side === 'Dr' ? 'bal-dr' : 'bal-cr'}>
-      {money(value.amount)} {value.side}
+    <span className={colorClass}>
+      {isNegative ? '- ' : ''}{money(value.amount)}
     </span>
   );
 }

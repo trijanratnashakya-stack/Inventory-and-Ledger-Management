@@ -49,6 +49,16 @@ export default function LedgerPage() {
   const isCustomer = party.type === 'customer';
   const hasOpeningBalance = statement.rows.some(r => r.particulars === 'Opening Balance' && !r.voided);
 
+  // Helper to determine side automatically
+  const getAutoSide = (particulars) => {
+    if (particulars === 'Opening Balance') return 'dr';
+    if (particulars === 'Goods') return isCustomer ? 'dr' : 'cr';
+    if (particulars === 'Cash') return isCustomer ? 'cr' : 'dr';
+    return 'dr';
+  };
+  const autoSide = getAutoSide(entry.particulars);
+  const sideLabel = autoSide === 'dr' ? 'Dr (debit)' : 'Cr (credit)';
+
   function startEdit() {
     setDetails({
       phone: party.phone,
@@ -88,7 +98,13 @@ export default function LedgerPage() {
     try {
       await api(`/parties/${id}/entries/${editingEntry._id}`, {
         method: 'PUT',
-        body: { date, particulars: editingEntry.particulars, ref: editingEntry.ref, side: editingEntry.side, amount: Number(editingEntry.amount) },
+        body: {
+          date,
+          particulars: editingEntry.particulars,
+          ref: editingEntry.particulars === 'Opening Balance' ? '' : editingEntry.ref,
+          side: getAutoSide(editingEntry.particulars),
+          amount: Number(editingEntry.amount)
+        },
       });
       setEditingEntry(null);
       setNotice('Entry updated.');
@@ -113,7 +129,7 @@ export default function LedgerPage() {
           date,
           particulars: entry.particulars,
           ref: entry.particulars === 'Opening Balance' ? '' : entry.ref,
-          side: entry.side,
+          side: autoSide,
           amount: Number(entry.amount)
         },
       });
@@ -204,7 +220,7 @@ export default function LedgerPage() {
           <div>
             <div className="stat-label">Opening</div>
             <div className="stat-value">
-              <Balance value={statement.opening} />
+              <Balance value={statement.opening} partyType={party.type} />
             </div>
           </div>
         </div>
@@ -220,7 +236,7 @@ export default function LedgerPage() {
           <div>
             <div className="stat-label">Closing balance</div>
             <div className="stat-value">
-              <Balance value={statement.closing} />
+              <Balance value={statement.closing} partyType={party.type} />
             </div>
           </div>
         </div>
@@ -300,22 +316,18 @@ export default function LedgerPage() {
                 <option value="Cash">Cash</option>
               </select>
             </div>
-            <div className="field">
-              <label htmlFor="ed-ref">Voucher / Ref</label>
-              <input id="ed-ref" maxLength={40} value={editingEntry.ref} onChange={(e) => setEditingEntry({ ...editingEntry, ref: e.target.value })} />
-            </div>
-            {editingEntry.particulars === 'Opening Balance' && (
+            {editingEntry.particulars !== 'Opening Balance' && (
               <div className="field">
-                <label htmlFor="ed-side">Side</label>
-                <select id="ed-side" value={editingEntry.side} onChange={(e) => setEditingEntry({ ...editingEntry, side: e.target.value })}>
-                  <option value="dr">Dr (debit)</option>
-                  <option value="cr">Cr (credit)</option>
-                </select>
+                <label htmlFor="ed-ref">Voucher / Ref</label>
+                <input id="ed-ref" maxLength={40} value={editingEntry.ref} onChange={(e) => setEditingEntry({ ...editingEntry, ref: e.target.value })} />
               </div>
             )}
             <div className="field">
               <label htmlFor="ed-amt">Amount (Rs.)</label>
               <input id="ed-amt" required type="number" min="0.01" step="0.01" value={editingEntry.amount} onChange={(e) => setEditingEntry({ ...editingEntry, amount: e.target.value })} />
+              {editingEntry.particulars !== 'Opening Balance' && (
+                <div className="hint">Will be recorded as {getAutoSide(editingEntry.particulars).toUpperCase()}</div>
+              )}
             </div>
           </div>
           <div className="inline-form">
@@ -356,23 +368,17 @@ export default function LedgerPage() {
               </select>
             </div>
             {entry.particulars !== 'Opening Balance' && (
-              <>
-                <div className="field">
-                  <label htmlFor="e-ref">Voucher / Ref</label>
-                  <input id="e-ref" maxLength={40} value={entry.ref} onChange={(e) => setEntry({ ...entry, ref: e.target.value })} />
-                </div>
-                <div className="field">
-                  <label htmlFor="e-side">Side</label>
-                  <select id="e-side" value={entry.side} onChange={(e) => setEntry({ ...entry, side: e.target.value })}>
-                    <option value="dr">Dr (debit)</option>
-                    <option value="cr">Cr (credit)</option>
-                  </select>
-                </div>
-              </>
+              <div className="field">
+                <label htmlFor="e-ref">Voucher / Ref</label>
+                <input id="e-ref" maxLength={40} value={entry.ref} onChange={(e) => setEntry({ ...entry, ref: e.target.value })} />
+              </div>
             )}
             <div className="field">
               <label htmlFor="e-amt">Amount (Rs.)</label>
               <input id="e-amt" required type="number" min="0.01" step="0.01" value={entry.amount} onChange={(e) => setEntry({ ...entry, amount: e.target.value })} />
+              {entry.particulars && entry.particulars !== 'Opening Balance' && (
+                <div className="hint">Will be recorded as {autoSide === 'dr' ? 'Dr' : 'Cr'}</div>
+              )}
             </div>
           </div>
           <button className="btn" disabled={busy}>
@@ -404,7 +410,7 @@ export default function LedgerPage() {
                   <td />
                   <td />
                   <td className="num">
-                    <Balance value={statement.opening} />
+                    <Balance value={statement.opening} partyType={party.type} />
                   </td>
                   <td className="no-print" />
                 </tr>
@@ -419,7 +425,7 @@ export default function LedgerPage() {
                   <td className="muted">{r.ref || '-'}</td>
                   <td className="num">{r.particulars === 'Opening Balance' ? '' : (r.debit ? money(r.debit) : '')}</td>
                   <td className="num">{r.particulars === 'Opening Balance' ? '' : (r.credit ? money(r.credit) : '')}</td>
-                  <td className="num">{r.balance ? <Balance value={r.balance} /> : ''}</td>
+                  <td className="num">{r.balance ? <Balance value={r.balance} partyType={party.type} /> : ''}</td>
                   <td className="no-print">
                     {!r.voided && (
                       <>
@@ -463,7 +469,7 @@ export default function LedgerPage() {
                 </td>
                 <td className="num">
                   <strong>
-                    <Balance value={statement.closing} />
+                    <Balance value={statement.closing} partyType={party.type} />
                   </strong>
                 </td>
                 <td className="no-print" />
