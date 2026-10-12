@@ -109,7 +109,13 @@ export default function LedgerPage() {
     try {
       await api(`/parties/${id}/entries`, {
         method: 'POST',
-        body: { date, particulars: entry.particulars, ref: entry.ref, side: entry.side, amount: Number(entry.amount) },
+        body: {
+          date,
+          particulars: entry.particulars,
+          ref: entry.particulars === 'Opening Balance' ? '' : entry.ref,
+          side: entry.side,
+          amount: Number(entry.amount)
+        },
       });
       setEntry({ ...blankEntry(), side: entry.side, bsDate: entry.bsDate });
       await load();
@@ -334,25 +340,35 @@ export default function LedgerPage() {
             </div>
             <div className="field">
               <label htmlFor="e-part">Particulars</label>
-              <select id="e-part" required value={entry.particulars} onChange={(e) => setEntry({ ...entry, particulars: e.target.value })}>
+              <select id="e-part" required value={entry.particulars} onChange={(e) => {
+                const p = e.target.value;
+                setEntry({
+                  ...entry,
+                  particulars: p,
+                  ref: p === 'Opening Balance' ? '' : entry.ref,
+                  side: p === 'Opening Balance' ? 'dr' : entry.side
+                });
+              }}>
                 <option value="">Select particulars</option>
                 <option value="Opening Balance" disabled={hasOpeningBalance}>Opening Balance</option>
                 <option value="Goods">Goods</option>
                 <option value="Cash">Cash</option>
               </select>
             </div>
-            <div className="field">
-              <label htmlFor="e-ref">Voucher / Ref</label>
-              <input id="e-ref" maxLength={40} value={entry.ref} onChange={(e) => setEntry({ ...entry, ref: e.target.value })} />
-            </div>
-            {entry.particulars === 'Opening Balance' && (
-              <div className="field">
-                <label htmlFor="e-side">Side</label>
-                <select id="e-side" value={entry.side} onChange={(e) => setEntry({ ...entry, side: e.target.value })}>
-                  <option value="dr">Dr (debit)</option>
-                  <option value="cr">Cr (credit)</option>
-                </select>
-              </div>
+            {entry.particulars !== 'Opening Balance' && (
+              <>
+                <div className="field">
+                  <label htmlFor="e-ref">Voucher / Ref</label>
+                  <input id="e-ref" maxLength={40} value={entry.ref} onChange={(e) => setEntry({ ...entry, ref: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label htmlFor="e-side">Side</label>
+                  <select id="e-side" value={entry.side} onChange={(e) => setEntry({ ...entry, side: e.target.value })}>
+                    <option value="dr">Dr (debit)</option>
+                    <option value="cr">Cr (credit)</option>
+                  </select>
+                </div>
+              </>
             )}
             <div className="field">
               <label htmlFor="e-amt">Amount (Rs.)</label>
@@ -380,17 +396,19 @@ export default function LedgerPage() {
               </tr>
             </thead>
             <tbody>
-              <tr className="muted">
-                <td />
-                <td>Opening balance</td>
-                <td />
-                <td />
-                <td />
-                <td className="num">
-                  <Balance value={statement.opening} />
-                </td>
-                <td className="no-print" />
-              </tr>
+              {!statement.rows.some(r => r.particulars === 'Opening Balance') && (
+                <tr className="muted">
+                  <td />
+                  <td>Opening balance</td>
+                  <td />
+                  <td />
+                  <td />
+                  <td className="num">
+                    <Balance value={statement.opening} />
+                  </td>
+                  <td className="no-print" />
+                </tr>
+              )}
               {statement.rows.map((r) => (
                 <tr key={r._id} className={r.voided ? 'row-void' : undefined}>
                   <td title={`AD ${r.date}`}>{adToBs(r.date)}</td>
@@ -399,8 +417,8 @@ export default function LedgerPage() {
                     {r.voided && <span className="badge"> voided</span>}
                   </td>
                   <td className="muted">{r.ref || '-'}</td>
-                  <td className="num">{r.debit ? money(r.debit) : ''}</td>
-                  <td className="num">{r.credit ? money(r.credit) : ''}</td>
+                  <td className="num">{r.particulars === 'Opening Balance' ? '' : (r.debit ? money(r.debit) : '')}</td>
+                  <td className="num">{r.particulars === 'Opening Balance' ? '' : (r.credit ? money(r.credit) : '')}</td>
                   <td className="num">{r.balance ? <Balance value={r.balance} /> : ''}</td>
                   <td className="no-print">
                     {!r.voided && (

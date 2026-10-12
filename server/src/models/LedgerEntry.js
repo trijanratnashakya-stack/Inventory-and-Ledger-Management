@@ -19,6 +19,7 @@ const ledgerEntrySchema = new mongoose.Schema(
     ref: { type: String, trim: true, maxlength: 40 },
     debit: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },
     credit: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },
+    openingBalanceAmount: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },
     voided: { type: Boolean, default: false },
     voidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     voidedAt: { type: Date },
@@ -28,6 +29,9 @@ const ledgerEntrySchema = new mongoose.Schema(
 );
 
 ledgerEntrySchema.pre('validate', function () {
+  if (this.particulars === 'Opening Balance') {
+    return;
+  }
   const d = this.debit || 0;
   const c = this.credit || 0;
   if ((d > 0) === (c > 0)) this.invalidate('debit', 'Enter either a debit or a credit amount, not both');

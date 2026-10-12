@@ -37,7 +37,12 @@ function buildStatement(party, entries) {
         totalCredit += e.credit || 0;
       }
     }
-    return { ...e, balance: e.voided ? null : describeBalance(running) };
+    return {
+      ...e,
+      balance: e.voided ? null : describeBalance(running),
+      debit: e.particulars === 'Opening Balance' ? 0 : e.debit,
+      credit: e.particulars === 'Opening Balance' ? 0 : e.credit
+    };
   });
 
   return {

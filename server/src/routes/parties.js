@@ -158,8 +158,18 @@ router.post('/:id/entries', async (req, res) => {
   }
 
   let finalSide = side;
-  if (particulars === 'Goods') finalSide = 'dr';
-  if (particulars === 'Cash') finalSide = 'cr';
+  if (particulars === 'Opening Balance') {
+    finalSide = 'dr';
+  } else if (particulars === 'Goods') {
+    finalSide = 'dr';
+  } else if (particulars === 'Cash') {
+    finalSide = 'cr';
+  }
+
+  let finalRef = ref;
+  if (particulars === 'Opening Balance') {
+    finalRef = undefined;
+  }
 
   if (!['dr', 'cr'].includes(finalSide)) return res.status(400).json({ error: 'Choose Dr or Cr' });
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Amount must be more than 0' });
@@ -168,9 +178,10 @@ router.post('/:id/entries', async (req, res) => {
     party: party._id,
     date,
     particulars,
-    ref: ref || undefined,
-    debit: finalSide === 'dr' ? amount : 0,
-    credit: finalSide === 'cr' ? amount : 0,
+    ref: finalRef,
+    openingBalanceAmount: particulars === 'Opening Balance' ? amount : 0,
+    debit: particulars !== 'Opening Balance' && finalSide === 'dr' ? amount : 0,
+    credit: particulars !== 'Opening Balance' && finalSide === 'cr' ? amount : 0,
     createdBy: req.user._id,
   });
   res.status(201).json({ ok: true });
