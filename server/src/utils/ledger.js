@@ -9,72 +9,122 @@ function signedOpening(party) {
   return party.openingSide === 'cr' ? -amount : amount;
 }
 
-function describeBalance(signed) {
+function describeBalance(signed, isVendor = false) {
   const value = round2(signed);
   if (value === 0) return { amount: 0, side: '' };
-  return { amount: Math.abs(value), side: value > 0 ? 'Dr' : 'Cr' };
+  const side = isVendor ? (value > 0 ? 'Cr' : 'Dr') : (value > 0 ? 'Dr' : 'Cr');
+  return { amount: Math.abs(value), side };
+}
+
+function calculateBalance(party, entries) {
+  const live = (entries || []).filter((e) => !e.voided);
+  const openingEntry = live.find((e) => e.particulars === 'Opening Balance');
+
+  let openingAmount = 0;
+  if (openingEntry) {
+    openingAmount = openingEntry.openingBalanceAmount || 0;
+  } else {
+    openingAmount = party.openingBalance || 0;
+  }
+
+  const isVendor = party.type === 'vendor';
+  const openingSide = party.openingSide || (isVendor ? 'cr' : 'dr');
+
+  let totalDebit = 0;
+  let totalCredit = 0;
+
+  for (const e of live) {
+    if (e === openingEntry) continue;
+    totalDebit += (e.debit || 0);
+    totalCredit += (e.credit || 0);
+  }
+
+  totalDebit = round2(totalDebit);
+  totalCredit = round2(totalCredit);
+
+  let signedClosing;
+  let signedOpeningVal;
+
+  if (isVendor) {
+    // Vendor: Cr = positive (we owe them), Dr = negative (they owe us)
+    // Formula: closing = opening + total Cr - total Dr
+    signedOpeningVal = openingSide === 'cr' ? openingAmount : -openingAmount;
+    signedClosing = round2(signedOpeningVal + totalCredit - totalDebit);
+  } else {
+    // Customer: Dr = positive (they owe us), Cr = negative (we owe them)
+    // Formula: closing = opening + total Dr - total Cr
+    signedOpeningVal = openingSide === 'cr' ? -openingAmount : openingAmount;
+    signedClosing = round2(signedOpeningVal + totalDebit - totalCredit);
+  }
+
+  return {
+    opening: describeBalance(signedOpeningVal, isVendor),
+    totalDebit,
+    totalCredit,
+    closing: describeBalance(signedClosing, isVendor),
+    signedClosing
+  };
 }
 
 // Entries must already be sorted by date, then creation time.
 function buildStatement(party, entries) {
-  const openingEntry = entries.find((e) => e.particulars === 'Opening Balance' && !e.voided);
+  const isVendor = party.type === 'vendor';
+  const live = (entries || []).filter((e) => !e.voided);
+  const openingEntry = live.find((e) => e.particulars === 'Opening Balance');
+  const openingSide = party.openingSide || (isVendor ? 'cr' : 'dr');
+  const baseOpening = openingEntry ? (openingEntry.openingBalanceAmount || 0) : (party.openingBalance || 0);
+
   let running;
-  if (openingEntry) {
-    // Treat opening balance amount as positive for both dr/cr to simplify calculation,
-    // party type determines sign in buildStatement's return.
-    running = openingEntry.openingBalanceAmount || 0;
-    // For customers, Opening Balance side is Dr, so opening is positive (Dr).
-    // For vendors, Opening Balance side is Cr, so opening is negative (Cr).
-    if (party.type === 'vendor') running = -running;
+  // Use consistent signed math: Customer (Dr pos, Cr neg), Vendor (Cr pos, Dr neg)
+  if (openingSide === 'cr') {
+    running = isVendor ? baseOpening : -baseOpening;
   } else {
-    running = signedOpening(party);
+    running = isVendor ? -baseOpening : baseOpening;
   }
 
-  let totalDebit = 0;
-  let totalCredit = 0;
   const rows = entries.map((e) => {
     let rowDebit = e.debit || 0;
     let rowCredit = e.credit || 0;
 
-    if (!e.voided) {
-      if (e !== openingEntry) {
+    if (!e.voided && e !== openingEntry) {
+      if (isVendor) {
+        running = round2(running + rowCredit - rowDebit);
+      } else {
         running = round2(running + rowDebit - rowCredit);
-        totalDebit += rowDebit;
-        totalCredit += rowCredit;
       }
     }
 
     return {
       ...e,
-      balance: e.voided ? null : describeBalance(running),
-      // Keep original debit/credit for display or calculation, but treat Opening Balance entry specially in totals
+      balance: e.voided ? null : describeBalance(running, isVendor),
       debit: rowDebit,
       credit: rowCredit
     };
   });
 
+  const calc = calculateBalance(party, entries);
+
   return {
-    opening: describeBalance(openingEntry ? (openingEntry.openingBalanceAmount || 0) * (party.type === 'vendor' ? -1 : 1) : signedOpening(party)),
+    opening: calc.opening,
     rows,
-    totalDebit: round2(totalDebit),
-    totalCredit: round2(totalCredit),
-    closing: describeBalance(running),
+    totalDebit: calc.totalDebit,
+    totalCredit: calc.totalCredit,
+    closing: calc.closing,
   };
 }
 
 // ---- Payment due status ----------------------------------------------------
-// What the other side owes (customers owe on the Dr side, we owe vendors on the Cr side) is split into
-// items by date. Payments on the opposite side clear the oldest items first (FIFO). The oldest item still
-// unpaid plus the account's credit days is the due date. The opening balance counts from the day the
-// account was created, or the first ledger entry if that is earlier.
 const DAY_MS = 86400000;
 const dayNumber = (s) => Date.UTC(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10))) / DAY_MS;
 const dayString = (n) => new Date(n * DAY_MS).toISOString().slice(0, 10);
-
-// Today's date in Nepal (UTC+5:45) as YYYY-MM-DD, so "overdue" flips at local midnight.
 const nepalToday = (now = Date.now()) => new Date(now + 5.75 * 3600000).toISOString().slice(0, 10);
 
 function dueInfo(party, entries, today = nepalToday(), createdDate) {
+  const calc = calculateBalance(party, entries);
+  if (calc.signedClosing === 0 || calc.closing.amount === 0) {
+    return { status: 'clear', outstanding: 0 };
+  }
+
   const vendor = party.type === 'vendor';
   const owed = vendor ? 'credit' : 'debit';
   const paid = vendor ? 'debit' : 'credit';
@@ -83,17 +133,17 @@ function dueInfo(party, entries, today = nepalToday(), createdDate) {
   const items = [];
   let payments = 0;
   const openingEntry = live.find((e) => e.particulars === 'Opening Balance');
-  const opening = openingEntry ? (openingEntry.debit || 0) - (openingEntry.credit || 0) : (party.openingBalance || 0);
+  const openingAmount = openingEntry ? (openingEntry.openingBalanceAmount || 0) : (party.openingBalance || 0);
+  const openingSide = party.openingSide || (vendor ? 'cr' : 'dr');
 
-  if (opening !== 0) {
-    const onOwedSide = vendor ? (openingEntry ? openingEntry.credit > 0 : party.openingSide === 'cr') : (openingEntry ? openingEntry.debit > 0 : party.openingSide !== 'cr');
-    const amount = Math.abs(opening);
+  const onOwedSide = vendor ? (openingSide === 'cr') : (openingSide === 'dr');
+  if (openingAmount !== 0) {
     if (onOwedSide) {
       let date = createdDate || today;
       if (live.length && live[0].date < date) date = live[0].date;
-      items.push({ date, amount: amount });
+      items.push({ date, amount: openingAmount });
     } else {
-      payments += amount;
+      payments += openingAmount;
     }
   }
   for (const e of live) {
@@ -114,12 +164,15 @@ function dueInfo(party, entries, today = nepalToday(), createdDate) {
     }
   }
   outstanding = round2(outstanding);
-  if (outstanding <= 0) return { status: 'clear', outstanding: 0 };
+  if (outstanding <= 0) {
+    outstanding = Math.abs(calc.signedClosing);
+    if (!oldest) oldest = createdDate || today;
+  }
 
   const creditDays = Number.isFinite(party.creditDays) ? party.creditDays : 30;
-  const dueDate = dayString(dayNumber(oldest) + creditDays);
+  const dueDate = dayString(dayNumber(oldest || createdDate || today) + creditDays);
   const late = dayNumber(today) - dayNumber(dueDate);
-  return { status: late > 0 ? 'overdue' : 'due', outstanding, oldestUnpaid: oldest, dueDate, days: Math.abs(late) };
+  return { status: late > 0 ? 'overdue' : 'due', outstanding, oldestUnpaid: oldest || createdDate || today, dueDate, days: Math.abs(late) };
 }
 
-module.exports = { round2, signedOpening, describeBalance, buildStatement, dueInfo, nepalToday };
+module.exports = { round2, signedOpening, describeBalance, calculateBalance, buildStatement, dueInfo, nepalToday };

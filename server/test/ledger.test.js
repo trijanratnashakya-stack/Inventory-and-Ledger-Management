@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert');
-const { buildStatement, describeBalance, signedOpening } = require('../src/utils/ledger');
+const { buildStatement, describeBalance, signedOpening, calculateBalance } = require('../src/utils/ledger');
 
 test('opening balance sign and description', () => {
   assert.strictEqual(signedOpening({ openingBalance: 500, openingSide: 'dr' }), 500);
@@ -29,7 +29,7 @@ test('ledger entry needs exactly one of debit or credit', async () => {
   const mongoose = require('mongoose');
   const LedgerEntry = require('../src/models/LedgerEntry');
   const id = new mongoose.Types.ObjectId();
-  const base = { party: id, date: '2026-09-02', particulars: 'x', createdBy: id };
+  const base = { party: id, date: '2026-09-02', particulars: 'Goods', createdBy: id };
   assert.ok((await new LedgerEntry({ ...base, debit: 5, credit: 5 }).validate().catch((e) => e)).errors.debit);
   assert.ok((await new LedgerEntry({ ...base }).validate().catch((e) => e)).errors.debit);
   assert.ok((await new LedgerEntry({ ...base, debit: 1.234 }).validate().catch((e) => e)).errors.debit);
@@ -79,4 +79,53 @@ test('due status for a vendor looks at what we owe (Cr), and an opening balance 
   assert.strictEqual(r.status, 'overdue');
   assert.strictEqual(r.outstanding, 300);
   assert.strictEqual(r.oldestUnpaid, '2026-08-01');
+});
+
+test('Ranjit figures give closing balance 176612 via calculateBalance and buildStatement', () => {
+  const party = { type: 'customer', openingBalance: 220335, openingSide: 'dr' };
+  const entries = [
+    { date: '2026-09-01', particulars: 'Opening Balance', openingBalanceAmount: 220335, debit: 0, credit: 0 },
+    { date: '2026-09-02', particulars: 'Goods', debit: 191277, credit: 0 },
+    { date: '2026-09-03', particulars: 'Cash', debit: 0, credit: 235000 },
+  ];
+  const calc = calculateBalance(party, entries);
+  assert.deepStrictEqual(calc.closing, { amount: 176612, side: 'Dr' });
+  const stmt = buildStatement(party, entries);
+  assert.deepStrictEqual(stmt.closing, { amount: 176612, side: 'Dr' });
+});
+
+test('vendor account balance calculation', () => {
+  const vendor = { type: 'vendor', openingBalance: 1000, openingSide: 'cr' };
+  const entries = [
+    { date: '2026-09-01', particulars: 'Goods', debit: 0, credit: 500 },
+    { date: '2026-09-02', particulars: 'Cash', debit: 200, credit: 0 },
+  ];
+  const calc = calculateBalance(vendor, entries);
+  assert.deepStrictEqual(calc.closing, { amount: 1300, side: 'Cr' });
+});
+
+test('account with no entries (balance = opening only)', () => {
+  const party = { type: 'customer', openingBalance: 500, openingSide: 'dr' };
+  const calc = calculateBalance(party, []);
+  assert.deepStrictEqual(calc.closing, { amount: 500, side: 'Dr' });
+});
+
+test('account with no opening balance', () => {
+  const party = { type: 'customer', openingBalance: 0, openingSide: 'dr' };
+  const entries = [
+    { date: '2026-09-01', particulars: 'Goods', debit: 300, credit: 0 },
+    { date: '2026-09-02', particulars: 'Cash', debit: 0, credit: 100 },
+  ];
+  const calc = calculateBalance(party, entries);
+  assert.deepStrictEqual(calc.closing, { amount: 200, side: 'Dr' });
+});
+
+test('account with a voided entry excludes voided entry', () => {
+  const party = { type: 'customer', openingBalance: 1000, openingSide: 'dr' };
+  const entries = [
+    { date: '2026-09-01', particulars: 'Goods', debit: 500, credit: 0 },
+    { date: '2026-09-02', particulars: 'Goods', debit: 200, credit: 0, voided: true },
+  ];
+  const calc = calculateBalance(party, entries);
+  assert.deepStrictEqual(calc.closing, { amount: 1500, side: 'Dr' });
 });

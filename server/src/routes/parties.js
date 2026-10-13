@@ -4,7 +4,7 @@ const Party = require('../models/Party');
 const LedgerEntry = require('../models/LedgerEntry');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const Setting = require('../models/Setting');
-const { signedOpening, describeBalance, buildStatement, dueInfo, round2 } = require('../utils/ledger');
+const { signedOpening, describeBalance, calculateBalance, buildStatement, dueInfo, round2 } = require('../utils/ledger');
 
 const router = express.Router();
 // Money records are for company-authorized accounts only: staff cannot see them.
@@ -43,12 +43,7 @@ function serializeParty(p) {
 // GET /api/parties/recent — returns recently updated parties/accounts
 router.get('/recent', async (req, res) => {
   const parties = await Party.find({ active: true }).sort({ updatedAt: -1 }).limit(20);
-  const sums = await LedgerEntry.aggregate([
-    { $match: { party: { $in: parties.map((p) => p._id) }, voided: false } },
-    { $group: { _id: '$party', debit: { $sum: '$debit' }, credit: { $sum: '$credit' } } },
-  ]);
-  const byParty = new Map(sums.map((s) => [String(s._id), s]));
-  const allEntries = await LedgerEntry.find({ party: { $in: parties.map((p) => p._id) }, voided: false }).select('party date debit credit voided').lean();
+  const allEntries = await LedgerEntry.find({ party: { $in: parties.map((p) => p._id) }, voided: false }).select('party date particulars debit credit openingBalanceAmount voided').lean();
   const entriesByParty = new Map();
   for (const e of allEntries) {
     const k = String(e.party);
@@ -57,10 +52,10 @@ router.get('/recent', async (req, res) => {
   }
 
   const items = parties.map((p) => {
-    const s = byParty.get(String(p._id)) || { debit: 0, credit: 0 };
-    const signed = round2(signedOpening(p) + s.debit - s.credit);
-    const due = dueInfo(p, entriesByParty.get(String(p._id)) || [], undefined, p.createdAt.toISOString().slice(0, 10));
-    return { ...serializeParty(p), balance: describeBalance(signed), due, updatedAt: p.updatedAt };
+    const entries = entriesByParty.get(String(p._id)) || [];
+    const calc = calculateBalance(p, entries);
+    const due = dueInfo(p, entries, undefined, p.createdAt.toISOString().slice(0, 10));
+    return { ...serializeParty(p), balance: calc.closing, due, updatedAt: p.updatedAt };
   });
   res.json({ items });
 });
@@ -73,12 +68,7 @@ router.get('/', async (req, res) => {
   if (req.query.q && String(req.query.q).trim()) filter.name = new RegExp(escapeRegex(String(req.query.q).trim()), 'i');
 
   const parties = await Party.find(filter).sort({ nameKey: 1 });
-  const sums = await LedgerEntry.aggregate([
-    { $match: { party: { $in: parties.map((p) => p._id) }, voided: false } },
-    { $group: { _id: '$party', debit: { $sum: '$debit' }, credit: { $sum: '$credit' } } },
-  ]);
-  const byParty = new Map(sums.map((s) => [String(s._id), s]));
-  const allEntries = await LedgerEntry.find({ party: { $in: parties.map((p) => p._id) }, voided: false }).select('party date debit credit voided').lean();
+  const allEntries = await LedgerEntry.find({ party: { $in: parties.map((p) => p._id) }, voided: false }).select('party date particulars debit credit openingBalanceAmount voided').lean();
   const entriesByParty = new Map();
   for (const e of allEntries) {
     const k = String(e.party);
@@ -88,12 +78,12 @@ router.get('/', async (req, res) => {
 
   const summary = { overdue: 0, due: 0, clear: 0, overdueAmount: 0 };
   const items = parties.map((p) => {
-    const s = byParty.get(String(p._id)) || { debit: 0, credit: 0 };
-    const signed = round2(signedOpening(p) + s.debit - s.credit);
-    const due = dueInfo(p, entriesByParty.get(String(p._id)) || [], undefined, p.createdAt.toISOString().slice(0, 10));
+    const entries = entriesByParty.get(String(p._id)) || [];
+    const calc = calculateBalance(p, entries);
+    const due = dueInfo(p, entries, undefined, p.createdAt.toISOString().slice(0, 10));
     summary[due.status] += 1;
     if (due.status === 'overdue') summary.overdueAmount = round2(summary.overdueAmount + due.outstanding);
-    return { ...serializeParty(p), balance: describeBalance(signed), due };
+    return { ...serializeParty(p), balance: calc.closing, due };
   });
   res.json({ items, summary });
 });

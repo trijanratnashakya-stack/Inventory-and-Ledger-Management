@@ -61,10 +61,10 @@ test('order lines keep a stack size and totals count units', async () => {
   const mongoose = require('mongoose');
   const Order = require('../src/models/Order');
   const id = new mongoose.Types.ObjectId();
-  const o = new Order({ number: 'ORD-0002', createdBy: id, items: [{ product: id, name: 'Plate', quantity: 3, stackSize: 12 }] });
+  const o = new Order({ number: 'ORD-0002', createdBy: id, items: [{ product: id, name: 'Plate', quantity: 3, sackSize: 12 }] });
   assert.strictEqual(await o.validate(), undefined);
-  assert.strictEqual(o.items[0].stackSize, 12);
+  assert.strictEqual(o.items[0].sackSize, 12);
   const Product = require('../src/models/Product');
-  const bad = new Product({ category: 'gem', productId: 'X1', name: 'Plate', stackSize: 0 });
-  assert.ok((await bad.validate().catch((e) => e)).errors.stackSize);
+  const bad = new Product({ category: 'gem', productId: 'X1', name: 'Plate', sackSize: 0 });
+  assert.ok((await bad.validate().catch((e) => e)).errors.sackSize);
 });
