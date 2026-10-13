@@ -17,6 +17,7 @@ const ledgerEntrySchema = new mongoose.Schema(
       maxlength: 200,
     },
     ref: { type: String, trim: true, maxlength: 40 },
+    refKey: { type: String, trim: true, index: true },
     debit: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },
     credit: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },
     openingBalanceAmount: { type: Number, default: 0, min: 0, max: 1e10, validate: { validator: twoDecimals, message: 'Use at most 2 decimal places' } },

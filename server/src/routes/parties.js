@@ -60,6 +60,79 @@ router.get('/recent', async (req, res) => {
   res.json({ items });
 });
 
+// GET /api/parties/vouchers/check?number=...&partyId=...&excludeEntryId=...
+router.get('/vouchers/check', async (req, res) => {
+  const { number, partyId, excludeEntryId } = req.query;
+  if (!number || !String(number).trim()) {
+    return res.json({ conflict: null });
+  }
+  const cleanNum = String(number).trim();
+  const refKey = cleanNum.toLowerCase();
+
+  const query = {
+    refKey,
+    voided: false,
+  };
+  if (excludeEntryId && isId(excludeEntryId)) {
+    query._id = { $ne: excludeEntryId };
+  }
+
+  const existingEntries = await LedgerEntry.find(query).populate('party', 'name type').lean();
+  if (!existingEntries || existingEntries.length === 0) {
+    return res.json({ conflict: null });
+  }
+
+  const currentPartyId = partyId && isId(partyId) ? String(partyId) : null;
+
+  // First look for a conflict on a different account
+  const diffAccountConflict = existingEntries.find(e => String(e.party._id) !== currentPartyId);
+  if (diffAccountConflict) {
+    const p = diffAccountConflict.party;
+    const amt = diffAccountConflict.particulars === 'Opening Balance'
+      ? diffAccountConflict.openingBalanceAmount
+      : (diffAccountConflict.debit || diffAccountConflict.credit || 0);
+    return res.json({
+      conflict: {
+        type: 'different_account',
+        accountName: p ? p.name : 'Another account',
+        particulars: diffAccountConflict.particulars,
+        date: diffAccountConflict.date,
+        amount: amt,
+        message: `Voucher No. ${cleanNum} has already been used in ${p ? p.name : 'another account'} (${diffAccountConflict.particulars}, ${diffAccountConflict.date}, Rs. ${amt.toLocaleString('en-IN')}).`,
+      }
+    });
+  }
+
+  // Otherwise check same account conflict
+  const sameAccountConflict = existingEntries.find(e => currentPartyId && String(e.party._id) === currentPartyId);
+  if (sameAccountConflict) {
+    return res.json({
+      conflict: {
+        type: 'same_account',
+        accountName: sameAccountConflict.party ? sameAccountConflict.party.name : 'this account',
+        particulars: sameAccountConflict.particulars,
+        date: sameAccountConflict.date,
+        amount: sameAccountConflict.particulars === 'Opening Balance' ? sameAccountConflict.openingBalanceAmount : (sameAccountConflict.debit || sameAccountConflict.credit || 0),
+        message: `This voucher number is already used in this account (${sameAccountConflict.particulars}, ${sameAccountConflict.date}).`,
+      }
+    });
+  }
+
+  const first = existingEntries[0];
+  const p = first.party;
+  const amt = first.particulars === 'Opening Balance' ? first.openingBalanceAmount : (first.debit || first.credit || 0);
+  return res.json({
+    conflict: {
+      type: 'different_account',
+      accountName: p ? p.name : 'Another account',
+      particulars: first.particulars,
+      date: first.date,
+      amount: amt,
+      message: `Voucher No. ${cleanNum} has already been used in ${p ? p.name : 'another account'} (${first.particulars}, ${first.date}, Rs. ${amt.toLocaleString('en-IN')}).`,
+    }
+  });
+});
+
 // GET /api/parties?type=customer|vendor&q=&includeInactive=1
 router.get('/', async (req, res) => {
   const filter = {};
@@ -139,7 +212,7 @@ router.post('/:id/entries', async (req, res) => {
   if (!party) return res.status(404).json({ error: 'Account not found' });
   if (!party.active) return res.status(409).json({ error: 'This account is inactive. Reactivate it to add entries.' });
 
-  const { date, particulars, ref } = req.body || {};
+  const { date, particulars, ref, allowSameAccountDuplicate } = req.body || {};
   const amount = Number(req.body && req.body.amount);
 
   if (!['Opening Balance', 'Goods', 'Cash'].includes(particulars)) return res.status(400).json({ error: 'Invalid particulars' });
@@ -160,6 +233,23 @@ router.post('/:id/entries', async (req, res) => {
     finalRef = undefined;
   }
 
+  // Voucher / Ref duplicate check server-side
+  if (finalRef && String(finalRef).trim() && particulars !== 'Opening Balance') {
+    const cleanRef = String(finalRef).trim();
+    const refKey = cleanRef.toLowerCase();
+    const existing = await LedgerEntry.find({ refKey, voided: false }).populate('party', 'name').lean();
+    if (existing && existing.length > 0) {
+      const diffAccount = existing.find(e => String(e.party._id) !== String(party._id));
+      if (diffAccount) {
+        const p = diffAccount.party;
+        const amt = diffAccount.particulars === 'Opening Balance' ? diffAccount.openingBalanceAmount : (diffAccount.debit || diffAccount.credit || 0);
+        return res.status(409).json({
+          error: `Voucher No. ${cleanRef} has already been used in ${p ? p.name : 'another account'} (${diffAccount.particulars}, ${diffAccount.date}, Rs. ${amt.toLocaleString('en-IN')}).`
+        });
+      }
+    }
+  }
+
   if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Amount must be more than 0' });
 
   await LedgerEntry.create({
@@ -167,6 +257,7 @@ router.post('/:id/entries', async (req, res) => {
     date,
     particulars,
     ref: finalRef,
+    refKey: finalRef ? String(finalRef).trim().toLowerCase() : undefined,
     openingBalanceAmount: particulars === 'Opening Balance' ? amount : 0,
     debit: particulars !== 'Opening Balance' && finalSide === 'dr' ? amount : 0,
     credit: particulars !== 'Opening Balance' && finalSide === 'cr' ? amount : 0,
@@ -248,9 +339,30 @@ router.put('/:id/entries/:entryId', async (req, res) => {
     finalSide = isCustomer ? 'cr' : 'dr';
   }
 
+  let finalRef = ref;
   if (ref !== undefined) {
-    entry.ref = entry.particulars === 'Opening Balance' ? undefined : (ref ? ref.trim() : undefined);
+    finalRef = entry.particulars === 'Opening Balance' ? undefined : (ref ? ref.trim() : undefined);
+    entry.ref = finalRef;
+    entry.refKey = finalRef ? String(finalRef).toLowerCase() : undefined;
   }
+
+  // Voucher / Ref duplicate check server-side for edit
+  if (finalRef && String(finalRef).trim() && entry.particulars !== 'Opening Balance') {
+    const cleanRef = String(finalRef).trim();
+    const refKey = cleanRef.toLowerCase();
+    const existing = await LedgerEntry.find({ refKey, voided: false, _id: { $ne: entry._id } }).populate('party', 'name').lean();
+    if (existing && existing.length > 0) {
+      const diffAccount = existing.find(e => String(e.party._id) !== String(party._id));
+      if (diffAccount) {
+        const p = diffAccount.party;
+        const amt = diffAccount.particulars === 'Opening Balance' ? diffAccount.openingBalanceAmount : (diffAccount.debit || diffAccount.credit || 0);
+        return res.status(409).json({
+          error: `Voucher No. ${cleanRef} has already been used in ${p ? p.name : 'another account'} (${diffAccount.particulars}, ${diffAccount.date}, Rs. ${amt.toLocaleString('en-IN')}).`
+        });
+      }
+    }
+  }
+
   if (!isNaN(amount)) {
     if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Amount must be more than 0' });
     entry.openingBalanceAmount = entry.particulars === 'Opening Balance' ? amount : 0;
