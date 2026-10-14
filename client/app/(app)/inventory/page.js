@@ -1,5 +1,5 @@
 'use client';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { api } from '@/lib/api';
 import { useDebounce } from '@/lib/hooks';
@@ -14,6 +14,142 @@ const STATUSES = [
   ['out', 'Out of Stock'],
 ];
 
+function QuantityCell({ p, editable, onUpdate }) {
+  const [val, setVal] = useState(String(p.quantity));
+  const [saving, setSaving] = useState(false);
+  const [statusMsg, setStatusMsg] = useState(null); // 'success' | 'error' | null
+  const prevQtyRef = useRef(p.quantity);
+  const debounceTimerRef = useRef(null);
+
+  useEffect(() => {
+    setVal(String(p.quantity));
+    prevQtyRef.current = p.quantity;
+  }, [p.quantity]);
+
+  const commitChange = async (newQtyNum) => {
+    if (newQtyNum === p.quantity) {
+      setVal(String(p.quantity));
+      return;
+    }
+    setSaving(true);
+    setStatusMsg(null);
+    try {
+      const res = await api(`/products/${p._id}/stock`, {
+        method: 'POST',
+        body: { set: newQtyNum },
+      });
+      prevQtyRef.current = res.quantity;
+      setVal(String(res.quantity));
+      setSaving(false);
+      setStatusMsg('success');
+      setTimeout(() => setStatusMsg(null), 2000);
+      onUpdate(p._id, res.quantity, res.status);
+    } catch (err) {
+      setVal(String(prevQtyRef.current));
+      setSaving(false);
+      setStatusMsg('error');
+      setTimeout(() => setStatusMsg(null), 3000);
+    }
+  };
+
+  const handleBlur = () => {
+    const trimmed = val.trim();
+    if (trimmed === '' || !/^\d+$/.test(trimmed)) {
+      setVal(String(prevQtyRef.current));
+      return;
+    }
+    const num = parseInt(trimmed, 10);
+    if (num > 999999) {
+      setVal(String(prevQtyRef.current));
+      return;
+    }
+    commitChange(num);
+  };
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.target.blur();
+    } else if (e.key === 'Escape') {
+      setVal(String(prevQtyRef.current));
+      e.target.blur();
+    }
+  };
+
+  const handleChange = (e) => {
+    let raw = e.target.value;
+    // Strip invalid characters: letters, decimals, e, negative signs
+    raw = raw.replace(/[^\d]/g, '');
+    if (raw !== '' && parseInt(raw, 10) > 999999) {
+      raw = '999999';
+    }
+    setVal(raw);
+  };
+
+  if (!editable) {
+    return <span className="num"><strong>{p.quantity}</strong></span>;
+  }
+
+  return (
+    <td className="num">
+      <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', justifyContent: 'flex-end', opacity: saving ? 0.6 : 1 }}>
+        <button
+          type="button"
+          className="btn btn-ghost btn-small"
+          aria-label={`Remove one ${p.name}`}
+          disabled={p.quantity <= 0 || saving}
+          onClick={() => onUpdate(p._id, p.quantity - 1, null, -1)}
+        >
+          −
+        </button>
+        <input
+          type="text"
+          inputMode="numeric"
+          aria-label={`Quantity for ${p.name} (${p.productId || 'ID ' + p._id})`}
+          value={val}
+          onChange={handleChange}
+          onBlur={handleBlur}
+          onKeyDown={handleKeyDown}
+          onFocus={(e) => e.target.select()}
+          disabled={saving}
+          style={{
+            width: '64px',
+            textAlign: 'center',
+            fontWeight: 'bold',
+            border: '1px solid transparent',
+            background: 'transparent',
+            padding: '2px 4px',
+            borderRadius: '6px',
+            transition: 'border-color 0.2s, background 0.2s',
+          }}
+          onMouseEnter={(e) => {
+            if (document.activeElement !== e.target) {
+              e.target.style.borderColor = '#d1d5db';
+              e.target.style.background = '#fff';
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (document.activeElement !== e.target) {
+              e.target.style.borderColor = 'transparent';
+              e.target.style.background = 'transparent';
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="btn btn-ghost btn-small"
+          aria-label={`Add one ${p.name}`}
+          disabled={saving}
+          onClick={() => onUpdate(p._id, p.quantity + 1, null, 1)}
+        >
+          +
+        </button>
+        {statusMsg === 'success' && <span title="Saved" style={{ color: 'var(--green)', fontSize: '12px', fontWeight: 'bold' }}>✓</span>}
+        {statusMsg === 'error' && <span title="Failed to save" style={{ color: 'var(--red)', fontSize: '12px', fontWeight: 'bold' }}>✕</span>}
+      </div>
+    </td>
+  );
+}
+
 export default function InventoryPage() {
   const user = useUser();
   const editable = canEdit(user);
@@ -27,6 +163,9 @@ export default function InventoryPage() {
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
   const dq = useDebounce(q);
+
+  // Track pending adjustments for rapid button clicks / debouncing
+  const pendingAdjustmentsRef = useRef(new Map()); // productId -> { deltaSum, timer }
 
   useEffect(() => {
     api('/companies').then((d) => setCompanies(d.companies)).catch(() => {});
@@ -57,14 +196,68 @@ export default function InventoryPage() {
     load();
   }, [load]);
 
-  async function adjust(id, delta) {
-    try {
-      await api(`/products/${id}/stock`, { method: 'POST', body: { delta } });
-      await load();
-    } catch (e) {
-      setError(e.message);
+  // Compute derived status based on quantity and threshold (matches server stockStatus)
+  const computeStatus = (qty, threshold) => {
+    if (qty <= 0) return 'out';
+    if (qty <= threshold) return 'low';
+    return 'in';
+  };
+
+  const handleProductUpdate = (id, newQty, newStatus, delta = null) => {
+    if (!result) return;
+
+    // Update local result items immediately for instant UI feedback without page reload
+    const updatedItems = result.items.map((p) => {
+      if (p._id === id) {
+        const qty = delta !== null ? p.quantity + delta : newQty;
+        const stat = newStatus || computeStatus(qty, p.lowStockThreshold);
+        return { ...p, quantity: qty, status: stat };
+      }
+      return p;
+    });
+
+    // If status filter is active, check if item still matches filter
+    let filteredItems = updatedItems;
+    if (status) {
+      filteredItems = updatedItems.filter((p) => p.status === status);
     }
-  }
+
+    setResult({
+      ...result,
+      items: filteredItems,
+    });
+
+    if (delta !== null) {
+      // Debounce delta requests for rapid + / - button clicks
+      const existing = pendingAdjustmentsRef.current.get(id);
+      if (existing) {
+        existing.deltaSum += delta;
+        clearTimeout(existing.timer);
+      } else {
+        pendingAdjustmentsRef.current.set(id, { deltaSum: delta, timer: null });
+      }
+
+      const entry = pendingAdjustmentsRef.current.get(id);
+      entry.timer = setTimeout(async () => {
+        const sum = entry.deltaSum;
+        pendingAdjustmentsRef.current.delete(id);
+        try {
+          const res = await api(`/products/${id}/stock`, { method: 'POST', body: { delta: sum } });
+          // Re-sync with server response
+          setResult((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              items: prev.items.map((p) => (p._id === id ? { ...p, quantity: res.quantity, status: res.status } : p)),
+            };
+          });
+        } catch (e) {
+          setError(e.message);
+          load(); // reload on error to restore correct state
+        }
+      }, 400);
+    }
+  };
 
   return (
     <>
@@ -174,24 +367,7 @@ export default function InventoryPage() {
                     <td>{p.name}</td>
                     <td className="muted">{CATEGORY_LABEL[p.category]}</td>
                     <td className="muted">{p.category === 'gem' ? 'Gems' : p.company ? p.company.name : '-'}</td>
-                    <td className="num">
-                      {editable && (
-                        <button
-                          className="btn btn-ghost btn-small"
-                          aria-label={`Remove one ${p.name}`}
-                          disabled={p.quantity <= 0}
-                          onClick={() => adjust(p._id, -1)}
-                        >
-                          −
-                        </button>
-                      )}{' '}
-                      <strong>{p.quantity}</strong>{' '}
-                      {editable && (
-                        <button className="btn btn-ghost btn-small" aria-label={`Add one ${p.name}`} onClick={() => adjust(p._id, 1)}>
-                          +
-                        </button>
-                      )}
-                    </td>
+                    <QuantityCell p={p} editable={editable} onUpdate={handleProductUpdate} />
                     <td>
                       <StatusPill status={p.status} />
                     </td>
